@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 axum = { version = "0.7.5", features = ["ws"] }
 axum-extra = { version = "0.9.3", features = ["typed-header"] }
+axum-server = { version = "0.7.1", features = ["tls-rustls"] }
 dotenv_codegen = "0.15.0"
 futures-util = "0.3.30"
 reqwest = "0.12.5"
