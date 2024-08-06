@@ -75,6 +75,17 @@ async fn handle_socket(state: DoorbellState, mut socket: WebSocket) {
 
     let send_task_sender_2 = send_task_sender.clone();
 
+    if sender
+        .send(Message::Text(format!(
+            "{}",
+            *ringing_reciever.borrow_and_update()
+        )))
+        .await
+        .is_err()
+    {
+        return;
+    }
+
     let mut send_task: JoinHandle<()> = tokio::spawn(async move {
         loop {
             if (send_task_receiver.changed().await).is_ok() {
