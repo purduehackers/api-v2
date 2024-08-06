@@ -4,10 +4,11 @@ use axum::{
         State,
     },
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
+use reqwest::StatusCode;
 use serde_json::json;
 use tokio::{
     sync::watch::{self, Receiver, Sender},
@@ -35,7 +36,7 @@ impl EndpointModule for DoorbellModule {
         Router::new()
             .route("/", get(live))
             .route("/status", get(status))
-            .route("/ring", get(ring))
+            .route("/ring", post(ring))
             .with_state(state)
     }
 }
@@ -115,6 +116,15 @@ async fn status(State(state): State<DoorbellState>) -> Json<serde_json::Value> {
     Json(json!({ "ringing": *state.receiver.borrow() }))
 }
 
-async fn ring(State(state): State<DoorbellState>) -> Json<serde_json::Value> {
-    Json(json!({ "ok": state.sender.send(true).is_ok() }))
+async fn ring(
+    State(state): State<DoorbellState>,
+    payload: String,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !payload.is_empty() {
+        let new_state = payload == "true" || payload == "1";
+
+        Ok(Json(json!({ "ok": state.sender.send(new_state).is_ok() })))
+    } else {
+        Ok(Json(json!({ "ok": state.sender.send(true).is_ok() })))
+    }
 }
