@@ -13,6 +13,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use endpoints::{
     doorbell::{DoorbellModule, DOORBELL_BASE_ENDPOINT},
     events::{EventsModule, EVENTS_BASE_ENDPOINT},
+    phonebell::{PhoneBellModule, PHONEBELL_BASE_ENDPOINT},
     EndpointModule,
 };
 use reqwest::StatusCode;
@@ -29,37 +30,48 @@ async fn main() {
     let app = Router::new()
         .route("/", get(root))
         .nest(DOORBELL_BASE_ENDPOINT, DoorbellModule::create_router())
+        .nest(PHONEBELL_BASE_ENDPOINT, PhoneBellModule::create_router())
         .nest(EVENTS_BASE_ENDPOINT, EventsModule::create_router());
     // TODO: Add your modules here using this syntax :3
 
-    let ports = Ports {
-        #[cfg(debug_assertions)]
-        http: 3000,
+    #[cfg(not(debug_assertions))]
+    {
+        let ports = Ports {
+            http: 80,
 
-        #[cfg(not(debug_assertions))]
-        http: 80,
+            https: 443,
+        };
 
-        https: 443,
-    };
+        tokio::spawn(redirect_http_to_https(ports));
 
-    tokio::spawn(redirect_http_to_https(ports));
-
-    let config = RustlsConfig::from_pem_file(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("certs")
-            .join("cert.pem"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("certs")
-            .join("key.pem"),
-    )
-    .await
-    .unwrap();
-
-    let addr = SocketAddr::from(([0, 0, 0, 0], ports.https));
-    axum_server::bind_rustls(addr, config)
-        .serve(app.into_make_service())
+        let config = RustlsConfig::from_pem_file(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("certs")
+                .join("cert.pem"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("certs")
+                .join("key.pem"),
+        )
         .await
         .unwrap();
+
+        let addr = SocketAddr::from(([0, 0, 0, 0], ports.https));
+        axum_server::bind_rustls(addr, config)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    }
+    #[cfg(debug_assertions)]
+    {
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap();
+
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    }
 }
 
 async fn root() -> Json<Value> {
