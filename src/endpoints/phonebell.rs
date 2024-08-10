@@ -5,11 +5,12 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         ConnectInfo, State,
     },
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
 use futures_util::{SinkExt, StreamExt};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use tokio::{
     sync::watch::{self, Sender},
@@ -54,20 +55,6 @@ enum PhoneType {
     Inside,
 }
 
-// Might implement later ;3
-// #[derive(Serialize, Deserialize)]
-// #[serde(tag = "type")]
-// #[allow(non_camel_case_types)] // Need this because WebRTC message types are all lower case
-// enum WebRTCSignalingMessage {
-//     offer {
-//         offer: serde_json::Value,
-//         from: String,
-//         to: String,
-//     },
-//     answer {},
-//     candidate {},
-// }
-
 #[derive(Clone)]
 enum WebRTCSignalingSocketInternalMessage {
     Relay(WebRTCSignalingRelayMessage),
@@ -101,12 +88,18 @@ impl EndpointModule for PhoneBellModule {
     }
 }
 
-async fn outside(State(state): State<PhoneBellState>, ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_phone_socket(state, socket, PhoneType::Outside))
+async fn outside(
+    State(state): State<PhoneBellState>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, StatusCode> {
+    Ok(ws.on_upgrade(move |socket| handle_phone_socket(state, socket, PhoneType::Outside)))
 }
 
-async fn inside(State(state): State<PhoneBellState>, ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_phone_socket(state, socket, PhoneType::Inside))
+async fn inside(
+    State(state): State<PhoneBellState>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, StatusCode> {
+    Ok(ws.on_upgrade(move |socket| handle_phone_socket(state, socket, PhoneType::Inside)))
 }
 
 async fn handle_phone_socket(state: PhoneBellState, mut socket: WebSocket, phone_type: PhoneType) {
@@ -125,6 +118,23 @@ async fn handle_phone_socket(state: PhoneBellState, mut socket: WebSocket, phone
     }
 
     let (mut sender, mut receiver) = socket.split();
+
+    //Wait for Auth before continuing
+    let Some(Ok(msg)) = receiver.next().await else {
+        return;
+    };
+
+    if let Message::Close(_) = msg {
+        return;
+    }
+
+    let Message::Text(message_text) = msg else {
+        return;
+    };
+
+    if message_text != dotenv!("PHONE_API_KEY") {
+        return;
+    }
 
     let (send_task_sender, mut send_task_receiver) =
         watch::channel::<PhoneSocketInternalMessage>(PhoneSocketInternalMessage::PingPong);
@@ -197,8 +207,8 @@ async fn handle_phone_socket(state: PhoneBellState, mut socket: WebSocket, phone
 
     let mut ring_watcher_task: JoinHandle<()> = tokio::spawn(async move {
         loop {
-            if ring_watcher_phone_type == PhoneType::Inside
-                && (ringing_listener.changed().await).is_ok()
+            if (ringing_listener.changed().await).is_ok()
+                && ring_watcher_phone_type == PhoneType::Inside
             {
                 let _ = send_task_sender.send(PhoneSocketInternalMessage::Ring(
                     *ringing_listener.borrow_and_update(),
@@ -390,13 +400,6 @@ async fn handle_signaling_socket(
                 message_text,
                 my_address,
             ));
-
-            // Might implement later ;3
-            // let Ok(_message): Result<WebRTCSignalingMessage, serde_json::Error> =
-            //     serde_json::from_str(&message_text)
-            // else {
-            //     continue;
-            // };
         }
     });
 
