@@ -3,27 +3,27 @@ extern crate dotenv_codegen;
 
 mod endpoints;
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::net::SocketAddr;
 
 use axum::{
-    extract::Host, handler::HandlerWithoutStateExt, http::Uri, response::Redirect, routing::get,
-    BoxError, Json, Router,
+    routing::get,
+    Json, Router,
 };
-use axum_server::tls_rustls::RustlsConfig;
 use endpoints::{
     doorbell::{DoorbellModule, DOORBELL_BASE_ENDPOINT},
     events::{EventsModule, EVENTS_BASE_ENDPOINT},
     phonebell::{PhoneBellModule, PHONEBELL_BASE_ENDPOINT},
     EndpointModule,
 };
-use reqwest::StatusCode;
 use serde_json::{json, Value};
 
+/*
 #[derive(Clone, Copy)]
 struct Ports {
     http: u16,
     https: u16,
 }
+*/
 
 #[tokio::main]
 async fn main() {
@@ -34,12 +34,12 @@ async fn main() {
         .nest(EVENTS_BASE_ENDPOINT, EventsModule::create_router());
     // TODO: Add your modules here using this syntax :3
 
-    #[cfg(not(debug_assertions))]
+    /*
     {
         let ports = Ports {
-            http: 80,
+            http: 4226,
 
-            https: 443,
+            https: 4227,
         };
 
         tokio::spawn(redirect_http_to_https(ports));
@@ -61,9 +61,9 @@ async fn main() {
             .await
             .unwrap();
     }
-    #[cfg(debug_assertions)]
+    */
     {
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:4226").await.unwrap();
 
         axum::serve(
             listener,
@@ -78,6 +78,7 @@ async fn root() -> Json<Value> {
     Json(json!({ "ok": true, "readme": "Welcome to the Purdue Hackers API!" }))
 }
 
+/*
 async fn redirect_http_to_https(ports: Ports) {
     fn make_https(host: String, uri: Uri, ports: Ports) -> Result<Uri, BoxError> {
         let mut parts = uri.into_parts();
@@ -108,3 +109,4 @@ async fn redirect_http_to_https(ports: Ports) {
         .await
         .unwrap();
 }
+*/
