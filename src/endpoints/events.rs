@@ -27,10 +27,10 @@ async fn events(groq: Query<GroqParameters>) -> Result<Json<serde_json::Value>, 
     let Ok(response) = client
         .get(format!(
             "https://{}.apicdn.sanity.io/v2023-02-16/data/query/production?query={}",
-            dotenv!("SANITY_PROJECT_ID"),
+            std::env::var("SANITY_PROJECT_ID").unwrap(),
             encode(&groq.groq)
         ))
-        .bearer_auth(dotenv!("SANITY_TOKEN"))
+        .bearer_auth(std::env::var("SANITY_TOKEN").unwrap())
         .send()
         .await
     else {

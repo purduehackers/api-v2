@@ -132,7 +132,7 @@ async fn handle_phone_socket(state: PhoneBellState, mut socket: WebSocket, phone
         return;
     };
 
-    if message_text != dotenv!("PHONE_API_KEY") {
+    if message_text != std::env::var("PHONE_API_KEY").unwrap() {
         return;
     }
 

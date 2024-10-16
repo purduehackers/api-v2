@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate dotenv_codegen;
-
 mod endpoints;
 
 use std::net::SocketAddr;
