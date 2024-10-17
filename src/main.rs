@@ -13,6 +13,7 @@ use endpoints::{
     EndpointModule,
 };
 use serde_json::{json, Value};
+use dotenv::dotenv;
 
 /*
 #[derive(Clone, Copy)]
@@ -24,6 +25,8 @@ struct Ports {
 
 #[tokio::main]
 async fn main() {
+    dotenv().ok();
+
     let app = Router::new()
         .route("/", get(root))
         .nest(DOORBELL_BASE_ENDPOINT, DoorbellModule::create_router())

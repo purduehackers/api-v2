@@ -8,6 +8,7 @@ axum = { version = "0.7.5", features = ["ws"] }
 axum-auth = "0.7.0"
 axum-extra = { version = "0.9.3", features = ["typed-header"] }
 axum-server = { version = "0.7.1", features = ["tls-rustls"] }
+dotenv = "0.15.0"
 futures-util = "0.3.30"
 reqwest = "0.12.5"
 serde = { version = "1.0.204", features = ["derive"] }

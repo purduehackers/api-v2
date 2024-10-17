@@ -7,13 +7,13 @@ rustPlatform.buildRustPackage rec {
   src = fetchFromGitHub {
     owner = "purduehackers";
     repo = "api";
-    rev = "c9d1815dc0f2242e7838f2788faff2aa42bd9e53";
-    hash = "sha256-8szcy81DC6SrIkPXzey7tYXOshh9jJ08FYb1QDIRprM=";
+    rev = "b48da90a0623d4af59261629396ccbe325ce8952";
+    hash = "sha256-xvPpXpILJNrigl8MZQrakCcMJE8KI+BiPUBf+bOgQzM=";
   };
 
   nativeBuildInputs = [ pkg-config ];
   buildInputs = [ openssl ];
 
-  cargoHash = "sha256-1ciCBFcJoelIWirrFgei5RArdmG/O5q5Zo/ZX/i0Dwc=";
+  cargoHash = "sha256-N+Ol92OhrRla/+G20+XtH9T1zUaKo06LoJIfzR5mPHA=";
   cargoDepsName = pname;
 }
