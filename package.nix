@@ -1,7 +1,7 @@
 { rustPlatform, fetchFromGitHub, openssl, pkg-config }:
 
 rustPlatform.buildRustPackage rec {
-  pname = "backend";
+  pname = "purdue-hackers-api";
   version = "0.1.0";
 
   src = fetchFromGitHub {
