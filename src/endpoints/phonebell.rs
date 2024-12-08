@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use tokio::sync::Mutex;
 
@@ -18,6 +18,7 @@ use tokio::{
     sync::watch::{self},
     task::JoinHandle,
 };
+use uuid::Uuid;
 
 use crate::config::PHONEBELL_KNOWN_NUMBERS;
 
@@ -27,7 +28,10 @@ pub const PHONEBELL_BASE_ENDPOINT: &str = "/phonebell";
 
 #[derive(Clone)]
 struct PhoneBellState {
-    call_state: watch::Sender<(i32, bool)>,
+    ringer_state: watch::Sender<bool>,
+
+    call_state_alerter: watch::Sender<()>,
+    call_state: Arc<Mutex<HashMap<Uuid, bool>>>,
 
     webrtc_signaling_message_queue: watch::Sender<WebRTCSignalingRelayMessage>,
 }
@@ -94,12 +98,19 @@ pub struct PhoneBellModule {}
 
 impl EndpointModule for PhoneBellModule {
     fn create_router() -> Router {
-        let (call_state, _) = watch::channel::<(i32, bool)>((0, false));
+        let (call_state_alerter, _) = watch::channel::<()>(());
+        let call_state = Arc::new(Mutex::new(HashMap::new()));
+
+        let (ringer_state, _) = watch::channel::<bool>(false);
         let (webrtc_signaling_message_queue, _) =
             watch::channel::<WebRTCSignalingRelayMessage>(WebRTCSignalingRelayMessage::None);
 
         let state = PhoneBellState {
+            ringer_state,
+
+            call_state_alerter,
             call_state,
+
             webrtc_signaling_message_queue,
         };
 
@@ -149,22 +160,32 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
 
     println!("phone connected, let's rock and roll");
 
+    let phone_id = Uuid::new_v4();
+
     let (send_task_sender, mut send_task_receiver) =
         tokio::sync::mpsc::channel::<PhoneSocketInternalMessage>(32);
     let send_task_sender_2 = send_task_sender.clone();
     let send_task_sender_3 = send_task_sender.clone();
     let send_task_sender_4 = send_task_sender.clone();
 
-    let call_state_sender = state.call_state.clone();
-    let call_state_sender_2 = state.call_state.clone();
-    let mut call_state_listener = state.call_state.subscribe();
-    let mut call_state_listener_2 = state.call_state.subscribe();
+    let ringer_state_sender = state.ringer_state.clone();
+    let ringer_state_sender_2 = state.ringer_state.clone();
+    let mut ringer_state_listener = state.ringer_state.subscribe();
+
+    let mut call_state_alerter = state.call_state_alerter.subscribe();
+    let mut call_state_alerter_2 = call_state_alerter.clone();
+    let call_state = state.call_state.clone();
+    let call_state_2 = state.call_state.clone();
+    let call_state_3 = state.call_state.clone();
 
     let phone_status = Arc::new(Mutex::new(PhoneStatus::Idle));
     let phone_status_2 = phone_status.clone();
 
     let hook_state = Arc::new(Mutex::new(true));
     let hook_state_2 = hook_state.clone();
+
+    (*call_state.lock().await).insert(phone_id, false);
+    call_state_alerter.mark_changed();
 
     let mut send_task: JoinHandle<()> = tokio::spawn(async move {
         loop {
@@ -224,72 +245,87 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
 
     let mut call_state_watcher_task: JoinHandle<()> = tokio::spawn(async move {
         loop {
-            if (call_state_listener.changed().await).is_ok() {
-                let new_call_state = *call_state_listener.borrow_and_update();
-                let hook_state = *hook_state_2.lock().await;
-
-                let mut locked_phone_status = phone_status_2.lock().await;
-
-                match *locked_phone_status {
-                    PhoneStatus::Idle => {
-                        if hook_state {
-                            let _ = send_task_sender_2
-                                .send(PhoneSocketInternalMessage::Ring(new_call_state.1))
-                                .await;
-                        }
+            tokio::select! {
+                ringer_result = ringer_state_listener.changed() => {
+                    if ringer_result.is_err() {
+                        continue;
                     }
-                    PhoneStatus::AwaitingUser => {}
-                    PhoneStatus::CallingOthers => {
-                        if !hook_state && new_call_state.0 > 1 {
-                            *locked_phone_status = PhoneStatus::InCall;
-
-                            let _ = send_task_sender_2
-                                .send(PhoneSocketInternalMessage::PlaySound(Sound::None))
-                                .await;
-                            let _ = send_task_sender_2
-                                .send(PhoneSocketInternalMessage::Mute(false))
-                                .await;
-                            let _ = send_task_sender_2
-                                .send(PhoneSocketInternalMessage::Ring(false))
-                                .await;
-
-                            call_state_sender_2.send_modify(|call_state| {
-                                call_state.1 = false;
-                            });
-                        }
+                }
+                call_state_result = call_state_alerter_2.changed() => {
+                    if call_state_result.is_err() {
+                        continue;
                     }
-                    PhoneStatus::InCall => {
-                        if !hook_state && new_call_state.0 == 1 && !new_call_state.1 {
-                            *locked_phone_status = PhoneStatus::AwaitingOthers;
+                }
+            };
 
-                            let _ = send_task_sender_2
-                                .send(PhoneSocketInternalMessage::PlaySound(Sound::Hangup))
-                                .await;
-                        }
+            let new_ringer_state = *ringer_state_listener.borrow_and_update();
+            let active_callers = (*call_state_2.lock().await)
+                .values()
+                .filter(|in_call| **in_call)
+                .count();
+            let hook_state = *hook_state_2.lock().await;
+
+            let mut locked_phone_status = phone_status_2.lock().await;
+
+            match *locked_phone_status {
+                PhoneStatus::Idle => {
+                    if hook_state {
+                        let _ = send_task_sender_2
+                            .send(PhoneSocketInternalMessage::Ring(new_ringer_state))
+                            .await;
                     }
-                    PhoneStatus::AwaitingOthers => {
-                        if !hook_state && new_call_state.0 > 1 {
-                            *locked_phone_status = PhoneStatus::InCall;
+                }
+                PhoneStatus::AwaitingUser => {}
+                PhoneStatus::CallingOthers => {
+                    if !hook_state && active_callers > 1 {
+                        *locked_phone_status = PhoneStatus::InCall;
 
-                            let _ = send_task_sender_2
-                                .send(PhoneSocketInternalMessage::PlaySound(Sound::None))
-                                .await;
-                            let _ = send_task_sender_2
-                                .send(PhoneSocketInternalMessage::Mute(false))
-                                .await;
-                            let _ = send_task_sender_2
-                                .send(PhoneSocketInternalMessage::Ring(false))
-                                .await;
+                        let _ = send_task_sender_2
+                            .send(PhoneSocketInternalMessage::PlaySound(Sound::None))
+                            .await;
+                        let _ = send_task_sender_2
+                            .send(PhoneSocketInternalMessage::Mute(false))
+                            .await;
+                        let _ = send_task_sender_2
+                            .send(PhoneSocketInternalMessage::Ring(false))
+                            .await;
 
-                            call_state_sender_2.send_modify(|call_state| {
-                                call_state.1 = false;
-                            });
-                        }
+                        ringer_state_sender.send_modify(|ringer_state| {
+                            *ringer_state = false;
+                        });
                     }
-                };
+                }
+                PhoneStatus::InCall => {
+                    if !hook_state && active_callers == 1 && !new_ringer_state {
+                        *locked_phone_status = PhoneStatus::AwaitingOthers;
 
-                drop(locked_phone_status);
-            }
+                        let _ = send_task_sender_2
+                            .send(PhoneSocketInternalMessage::PlaySound(Sound::Hangup))
+                            .await;
+                    }
+                }
+                PhoneStatus::AwaitingOthers => {
+                    if !hook_state && active_callers > 1 {
+                        *locked_phone_status = PhoneStatus::InCall;
+
+                        let _ = send_task_sender_2
+                            .send(PhoneSocketInternalMessage::PlaySound(Sound::None))
+                            .await;
+                        let _ = send_task_sender_2
+                            .send(PhoneSocketInternalMessage::Mute(false))
+                            .await;
+                        let _ = send_task_sender_2
+                            .send(PhoneSocketInternalMessage::Ring(false))
+                            .await;
+
+                        ringer_state_sender.send_modify(|ringer_state| {
+                            *ringer_state = false;
+                        });
+                    }
+                }
+            };
+
+            drop(locked_phone_status);
         }
     });
 
@@ -373,13 +409,22 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
                                         .send(PhoneSocketInternalMessage::Mute(false))
                                         .await;
 
-                                    call_state_sender.send_modify(|call_state| {
-                                        call_state.0 += 1;
+                                    let mut locked_phone_map = call_state.lock().await;
 
-                                        if call_state.0 <= 1 {
-                                            call_state.1 = true;
-                                        }
-                                    });
+                                    locked_phone_map.insert(phone_id, true);
+
+                                    if locked_phone_map
+                                        .values()
+                                        .filter(|in_call| **in_call)
+                                        .count()
+                                        <= 1
+                                    {
+                                        let _ = ringer_state_sender_2.send(true);
+                                    }
+
+                                    drop(locked_phone_map);
+
+                                    call_state_alerter.mark_changed();
                                 }
                             }
                         }
@@ -398,7 +443,11 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
 
                     if !state {
                         // User picked up the phone
-                        let call_going = call_state_listener_2.borrow_and_update().0 > 0;
+                        let call_going = (*call_state.lock().await)
+                            .values()
+                            .filter(|in_call| **in_call)
+                            .count()
+                            > 0;
 
                         if call_going {
                             let _ = send_task_sender_4
@@ -411,11 +460,10 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
                                 .send(PhoneSocketInternalMessage::PlaySound(Sound::None))
                                 .await;
 
-                            call_state_sender.send_modify(|call_state| {
-                                call_state.0 += 1;
+                            (*call_state.lock().await).insert(phone_id, true);
+                            call_state_alerter.mark_changed();
 
-                                call_state.1 = false;
-                            });
+                            let _ = ringer_state_sender_2.send(false);
 
                             *locked_phone_status = PhoneStatus::InCall;
                         } else {
@@ -448,13 +496,22 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
 
                                     *locked_phone_status = PhoneStatus::CallingOthers;
 
-                                    call_state_sender.send_modify(|call_state| {
-                                        call_state.0 += 1;
+                                    let mut locked_phone_map = call_state.lock().await;
 
-                                        if call_state.0 <= 1 {
-                                            call_state.1 = true;
-                                        }
-                                    });
+                                    locked_phone_map.insert(phone_id, true);
+
+                                    if locked_phone_map
+                                        .values()
+                                        .filter(|in_call| **in_call)
+                                        .count()
+                                        <= 1
+                                    {
+                                        let _ = ringer_state_sender_2.send(true);
+                                    }
+
+                                    drop(locked_phone_map);
+
+                                    call_state_alerter.mark_changed();
                                 }
                                 PhoneStatus::CallingOthers => {
                                     let _ = send_task_sender_4
@@ -513,25 +570,22 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
                                 dialed_number = String::from("");
                             }
                             PhoneStatus::CallingOthers => {
-                                call_state_sender.send_modify(|call_state| {
-                                    call_state.0 -= 1;
+                                (*call_state.lock().await).insert(phone_id, false);
+                                call_state_alerter.mark_changed();
 
-                                    call_state.1 = false;
-                                });
+                                let _ = ringer_state_sender_2.send(false);
                             }
                             PhoneStatus::InCall => {
-                                call_state_sender.send_modify(|call_state| {
-                                    call_state.0 -= 1;
+                                (*call_state.lock().await).insert(phone_id, false);
+                                call_state_alerter.mark_changed();
 
-                                    call_state.1 = false;
-                                });
+                                let _ = ringer_state_sender_2.send(false);
                             }
                             PhoneStatus::AwaitingOthers => {
-                                call_state_sender.send_modify(|call_state| {
-                                    call_state.0 -= 1;
+                                (*call_state.lock().await).insert(phone_id, false);
+                                call_state_alerter.mark_changed();
 
-                                    call_state.1 = false;
-                                });
+                                let _ = ringer_state_sender_2.send(false);
                             }
                         }
 
@@ -566,6 +620,8 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
             recv_task.abort();
         }
     }
+
+    (*call_state_3.lock().await).remove(&phone_id);
 }
 
 async fn signaling(
