@@ -1,3 +1,4 @@
+mod config;
 mod endpoints;
 
 use std::net::SocketAddr;
