@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use axum::{routing::get, Json, Router};
 use dotenv::dotenv;
 use endpoints::{
+    beacons::{BeaconModule, BEACONS_BASE_ENDPOINT},
     doorbell::{DoorbellModule, DOORBELL_BASE_ENDPOINT},
     events::{EventsModule, EVENTS_BASE_ENDPOINT},
     phonebell::{PhoneBellModule, PHONEBELL_BASE_ENDPOINT},
@@ -23,7 +24,8 @@ async fn main() {
         .nest(DOORBELL_BASE_ENDPOINT, DoorbellModule::create_router())
         .nest(PHONEBELL_BASE_ENDPOINT, PhoneBellModule::create_router())
         .nest(EVENTS_BASE_ENDPOINT, EventsModule::create_router())
-        .nest(PRINTER_BASE_ENDPOINT, PrinterModule::create_router());
+        .nest(PRINTER_BASE_ENDPOINT, PrinterModule::create_router())
+        .nest(BEACONS_BASE_ENDPOINT, BeaconModule::create_router());
     // TODO: Add your modules here using this syntax :3
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:4226").await.unwrap();

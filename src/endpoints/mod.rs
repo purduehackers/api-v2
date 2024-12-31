@@ -1,5 +1,6 @@
 use axum::Router;
 
+pub mod beacons;
 pub mod doorbell;
 pub mod events;
 pub mod phonebell;
