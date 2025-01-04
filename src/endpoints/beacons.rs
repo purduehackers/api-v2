@@ -81,6 +81,7 @@ async fn data(State(state): State<BeaconState>, ws: WebSocketUpgrade) -> impl In
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(tag = "type")]
 enum WebWebSocketInOut {
     Update {
         message: String,
@@ -105,12 +106,14 @@ struct WebWebSocketInOutWrapper {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(tag = "type")]
 enum DataWebSocketOut {
     Update { message: String },
     Ping,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
 enum DataWebSocketIn {
     Hello { id: usize, status: BatteryStatus },
     Battery { status: BatteryStatus },
@@ -128,36 +131,44 @@ async fn handle_data_socket(state: BeaconState, socket: WebSocket) {
 
     let id = match msg {
         Message::Text(txt) => {
-            let Ok(msg) = serde_json::from_str::<DataWebSocketIn>(&txt) else {
+            let Ok(DataWebSocketIn::Hello { id, status }) =
+                serde_json::from_str::<DataWebSocketIn>(&txt)
+            else {
+                eprintln!("Invalid message! must say hello!");
+                let _ = tx
+                    .send(Message::Text(
+                        "INVALID FIRST MESSAGE. Must say hello!".to_string(),
+                    ))
+                    .await;
+                // let s = tx.reunite(rx).unwrap();
+                // let _ = s.close().await;
+                let _ = tx.close().await;
                 return;
             };
 
-            if let DataWebSocketIn::Hello { id, status } = msg {
-                state.data.lock().await.insert(
-                    id,
-                    BeaconData {
-                        description: None,
-                        battery: status,
-                    },
-                );
+            state.data.lock().await.insert(
+                id,
+                BeaconData {
+                    description: None,
+                    battery: status,
+                },
+            );
 
-                id
-            } else {
-                eprintln!("Invalid message! must say hello!");
-                return;
-            }
+            id
         }
         _ => {
-            eprintln!("Invalid message! Must say hello!");
+            eprintln!("Invalid message! must say hello!");
+            let _ = tx.close().await;
             return;
         }
     };
 
+    let rx_data = state.data.clone();
     let receiver: JoinHandle<Result<(), serde_json::Error>> = tokio::spawn(async move {
         while let Some(Ok(msg)) = rx.next().await {
             match msg {
                 Message::Close(_) => {
-                    state.data.lock().await.remove(&id);
+                    rx_data.lock().await.remove(&id);
                     break;
                 }
                 Message::Text(txt) => {
@@ -166,6 +177,10 @@ async fn handle_data_socket(state: BeaconState, socket: WebSocket) {
                     match msg {
                         DataWebSocketIn::Hello { .. } => eprintln!("Can't send hello again!"),
                         DataWebSocketIn::Battery { status } => {
+                            if let Some(val) = rx_data.lock().await.get_mut(&id) {
+                                val.battery = status;
+                            }
+
                             let _ = btx.send(
                                 WebWebSocketInOut::BatteryUpdate { status }.wrapping_target(id),
                             );
@@ -201,6 +216,7 @@ async fn handle_data_socket(state: BeaconState, socket: WebSocket) {
     });
 
     let br_send = send_tx.clone();
+    let br_data = state.data.clone();
     let broadcast_rx = tokio::spawn(async move {
         loop {
             if let Ok(ev) = brx.recv().await {
@@ -210,7 +226,13 @@ async fn handle_data_socket(state: BeaconState, socket: WebSocket) {
 
                 let ev = match ev.data {
                     WebWebSocketInOut::Ping => DataWebSocketOut::Ping,
-                    WebWebSocketInOut::Update { message } => DataWebSocketOut::Update { message },
+                    WebWebSocketInOut::Update { message } => {
+                        if let Some(val) = br_data.lock().await.get_mut(&id) {
+                            val.description = Some(message.clone());
+                        }
+
+                        DataWebSocketOut::Update { message }
+                    }
                     _ => continue,
                 };
 
@@ -226,7 +248,11 @@ async fn handle_data_socket(state: BeaconState, socket: WebSocket) {
     tokio::select! {
         _ = broadcast_rx => {},
         _ = receiver => {},
-        _ = sender => {},
+        s = sender => {
+            if let Err(s) = s {
+                eprintln!("Send error for data: {s}");
+            }
+        },
         _ = ping => {}
     }
 }
@@ -237,14 +263,20 @@ async fn handle_socket(state: BeaconState, socket: WebSocket) {
     let mut brx = state.broadcast.subscribe();
     let btx = state.broadcast.clone();
 
-    let receiver: JoinHandle<Result<(), serde_json::Error>> = tokio::spawn(async move {
+    let rx_send = send_tx.clone();
+    let receiver: JoinHandle<Result<(), SendError<Message>>> = tokio::spawn(async move {
         while let Some(Ok(msg)) = rx.next().await {
             match msg {
                 Message::Close(_) => {
                     break;
                 }
                 Message::Text(txt) => {
-                    let msg: WebWebSocketInOutWrapper = serde_json::from_str(&txt)?;
+                    let Ok(msg) = serde_json::from_str::<WebWebSocketInOutWrapper>(&txt) else {
+                        rx_send
+                            .send(Message::Text("Invalid data received.".to_string()))
+                            .await?;
+                        continue;
+                    };
 
                     if matches!(msg.data, WebWebSocketInOut::BatteryUpdate { .. }) {
                         eprintln!("Web clients cannot send battery updates!");
@@ -297,7 +329,11 @@ async fn handle_socket(state: BeaconState, socket: WebSocket) {
     tokio::select! {
         _ = broadcast_rx => {},
         _ = receiver => {},
-        _ = sender => {},
+        s = sender => {
+            if let Err(s) = s {
+                eprintln!("Send error for data: {s}");
+            }
+        },
         _ = ping => {}
     }
 }
