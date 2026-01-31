@@ -6,12 +6,13 @@ rustPlatform.buildRustPackage rec {
 
   meta.mainProgram = "backend";
 
-  src = fetchFromGitHub {
-    owner = "purduehackers";
-    repo = "api";
-    rev = "e4fd55b2cbc7caa714a2e5e6954f7d17c0eb5956";
-    hash = "sha256-oYuX/X95WQh5mQJDoh2W7wzzqX7nscdS/JrRVornaRA=";
-  };
+  # src = fetchFromGitHub {
+  #   owner = "purduehackers";
+  #   repo = "api";
+  #   rev = "e4fd55b2cbc7caa714a2e5e6954f7d17c0eb5956";
+  #   hash = "sha256-oYuX/X95WQh5mQJDoh2W7wzzqX7nscdS/JrRVornaRA=";
+  # };
+  src = ./.;
 
   nativeBuildInputs = [ pkg-config ];
   buildInputs = [ openssl ];
