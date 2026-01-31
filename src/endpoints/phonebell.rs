@@ -170,10 +170,12 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
 
     let ringer_state_sender = state.ringer_state.clone();
     let ringer_state_sender_2 = state.ringer_state.clone();
+    let ringer_state_sender_cleanup = state.ringer_state.clone();
     let mut ringer_state_listener = state.ringer_state.subscribe();
 
     let mut call_state_alerter = state.call_state_alerter.subscribe();
     let mut call_state_alerter_2 = call_state_alerter.clone();
+    let call_state_alerter_cleanup = state.call_state_alerter.clone();
     let call_state = state.call_state.clone();
     let call_state_2 = state.call_state.clone();
     let call_state_3 = state.call_state.clone();
@@ -621,7 +623,29 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
         }
     }
 
-    (*call_state_3.lock().await).remove(&phone_id);
+    // Clean up on disconnect - remove from call_state and update ringer if needed
+    let mut locked_call_state = call_state_3.lock().await;
+    let was_in_call = locked_call_state.get(&phone_id).copied().unwrap_or(false);
+    locked_call_state.remove(&phone_id);
+
+    // If this phone was in a call, check if anyone else is still calling
+    if was_in_call {
+        let active_callers = locked_call_state
+            .values()
+            .filter(|in_call| **in_call)
+            .count();
+
+        // If no one else is calling, stop the ringer
+        if active_callers == 0 {
+            let _ = ringer_state_sender_cleanup.send(false);
+        }
+
+        // Notify other phones of the state change
+        drop(locked_call_state);
+        call_state_alerter_cleanup.send(()).ok();
+    }
+
+    println!("Phone disconnected, cleaned up state");
 }
 
 async fn signaling(
