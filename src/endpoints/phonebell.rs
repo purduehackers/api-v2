@@ -67,7 +67,7 @@ enum PhoneSocketInternalMessage {
     PingPong,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 enum PhoneStatus {
     Idle,
     AwaitingUser,
@@ -76,7 +76,7 @@ enum PhoneStatus {
     AwaitingOthers,
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 enum PhoneType {
     Outside,
     Inside,
@@ -139,7 +139,8 @@ async fn inside(
 async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_type: PhoneType) {
     let (mut sender, mut receiver) = socket.split();
 
-    println!("phone waiting for auth...");
+    let phone_label = format!("{:?}", phone_type);
+    println!("[{}] phone waiting for auth...", phone_label);
 
     //Wait for Auth before continuing
     let Some(Ok(msg)) = receiver.next().await else {
@@ -158,7 +159,7 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
         return;
     }
 
-    println!("phone connected, let's rock and roll");
+    println!("[{}] phone connected, let's rock and roll", phone_label);
 
     let phone_id = Uuid::new_v4();
 
@@ -189,10 +190,11 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
     (*call_state.lock().await).insert(phone_id, false);
     call_state_alerter.mark_changed();
 
+    let phone_label_tx = phone_label.clone();
     let mut send_task: JoinHandle<()> = tokio::spawn(async move {
         loop {
             if let Some(next_message) = send_task_receiver.recv().await {
-                println!("Phone Socket tx: {:?}", next_message);
+                println!("[{}] Phone Socket tx: {:?}", phone_label_tx, next_message);
 
                 match next_message {
                     PhoneSocketInternalMessage::Ring(state) => {
@@ -341,6 +343,7 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
         }
     });
 
+    let phone_label_rx = phone_label.clone();
     let mut recv_task: JoinHandle<()> = tokio::spawn(async move {
         let mut dialed_number = String::from("");
 
@@ -359,12 +362,15 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
                 continue;
             };
 
-            println!("Phone Socket rx: {:?}", message);
+            println!("[{}] Phone Socket rx: {:?}", phone_label_rx, message);
 
             let mut locked_phone_status = phone_status.lock().await;
 
             match message {
                 PhoneIncomingMessage::Dial { number } => {
+                    let hook_val = *hook_state.lock().await;
+                    println!("[{}] Dial handler: status={:?}, hook={}, dialed_so_far='{}', number='{}'",
+                        phone_label_rx, *locked_phone_status, hook_val, dialed_number, number);
                     match *locked_phone_status {
                         PhoneStatus::Idle => {
                             dialed_number.push_str(&number);
@@ -442,14 +448,16 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
                 }
                 PhoneIncomingMessage::Hook { state } => {
                     *hook_state.lock().await = state;
+                    println!("[{}] Hook handler: status={:?}, hook_state={}", phone_label_rx, *locked_phone_status, state);
 
                     if !state {
                         // User picked up the phone
-                        let call_going = (*call_state.lock().await)
-                            .values()
-                            .filter(|in_call| **in_call)
-                            .count()
-                            > 0;
+                        let locked_cs = call_state.lock().await;
+                        let active: Vec<bool> = locked_cs.values().copied().collect();
+                        let call_going = active.iter().filter(|in_call| **in_call).count() > 0;
+                        drop(locked_cs);
+
+                        println!("[{}] Hook pickup: call_going={}, call_state={:?}", phone_label_rx, call_going, active);
 
                         if call_going {
                             let _ = send_task_sender_4
@@ -645,7 +653,7 @@ async fn handle_phone_socket(state: PhoneBellState, socket: WebSocket, phone_typ
         call_state_alerter_cleanup.send(()).ok();
     }
 
-    println!("Phone disconnected, cleaned up state");
+    println!("[{}] Phone disconnected, cleaned up state", phone_label);
 }
 
 async fn signaling(
